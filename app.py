@@ -1,24 +1,40 @@
 import re
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from PIL import Image, ImageOps
 
 from ai import make_test
-from database import count_results, create_user, init_db, list_results, save_result, verify_user
+from database import (
+    count_friends,
+    create_user,
+    get_profile,
+    init_db,
+    list_results,
+    save_result,
+    update_profile,
+    verify_user,
+)
 from ui import (
+    apply_profile_style,
     apply_style,
+    avatar_html,
     fmt,
     grade_for,
     highlights_html,
     page_title,
+    profile_info_html,
     question_head,
+    recent_tests_html,
     show_result,
     step_title,
 )
 
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+MAX_PHOTO_BYTES = 5 * 1024 * 1024  # най-много 5 MB за профилна снимка
 
 st.set_page_config(
     page_title="Quizify",
@@ -45,6 +61,17 @@ def score_question(selected, correct, rule):
     right = len(selected & correct)  # колко верни е отбелязал
     wrong = len(selected - correct)  # колко грешни е отбелязал
     return max(0.0, (right - wrong) / len(correct))
+
+
+def make_avatar(raw_bytes):
+    """Прави качената снимка квадратна (256x256) и я връща като PNG байтове."""
+    image = Image.open(BytesIO(raw_bytes))
+    image = ImageOps.exif_transpose(image)  # оправя снимки от телефон, които са завъртени
+    image = image.convert("RGB")
+    image = ImageOps.fit(image, (256, 256), Image.Resampling.LANCZOS)  # изрязва по центъра
+    out = BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
 
 
 def page_new_test():
@@ -319,54 +346,130 @@ def page_history():
 def page_profile():
     user = st.session_state.get("user")
 
-    # Ако вече е влязъл - показваме профила
-    if user:
-        page_title("Профил")
-        with st.container(key="card_profile"):
-            st.markdown(f"### Здравей, {user['username']}")
-            st.write(f"Запазени тестове: **{count_results(user['id'])}**")
-            if st.button("Изход"):
-                for key in ("user", "test", "result", "settings"):
-                    st.session_state.pop(key, None)
-                st.rerun()
+    # ---------- Ако не е влязъл: вход или регистрация ----------
+    if not user:
+        page_title("Влез в Quizify", "Профилът запазва резултатите ти и показва как напредваш.")
+        with st.container(key="card_auth"):
+            tab_login, tab_register = st.tabs(["Вход", "Регистрация"])
+
+            with tab_login:
+                with st.form("login_form"):
+                    username = st.text_input("Потребителско име")
+                    password = st.text_input("Парола", type="password")
+                    login_clicked = st.form_submit_button("Влез", type="primary")
+                if login_clicked:
+                    found = verify_user(username, password)
+                    if found:
+                        st.session_state["user"] = found
+                        st.rerun()
+                    else:
+                        st.error("Грешно потребителско име или парола.")
+
+            with tab_register:
+                with st.form("register_form"):
+                    new_name = st.text_input("Избери потребителско име")
+                    new_pass = st.text_input("Парола (поне 8 символа)", type="password")
+                    new_pass2 = st.text_input("Повтори паролата", type="password")
+                    register_clicked = st.form_submit_button("Създай профил", type="primary")
+                if register_clicked:
+                    if not re.fullmatch(r"\w{3,30}", new_name.strip()):
+                        st.error("Името е от 3 до 30 символа: букви, цифри или _ (без интервали).")
+                    elif len(new_pass) < 8:
+                        st.error("Паролата трябва да е поне 8 символа.")
+                    elif new_pass != new_pass2:
+                        st.error("Двете пароли не съвпадат.")
+                    elif create_user(new_name, new_pass):
+                        st.session_state["user"] = verify_user(new_name, new_pass)
+                        st.rerun()
+                    else:
+                        st.error("Това име вече е заето. Избери друго.")
         return
 
-    # Иначе - вход или регистрация
-    page_title("Влез в Quizify", "Профилът запазва резултатите ти и показва как напредваш.")
-    with st.container(key="card_auth"):
-        tab_login, tab_register = st.tabs(["Вход", "Регистрация"])
+    # ---------- Ако е влязъл: профил ----------
+    apply_profile_style()
+    profile = get_profile(user["id"])
+    results = list_results(user["id"])  # най-новите първи
+    friends = count_friends(user["id"])
 
-        with tab_login:
-            with st.form("login_form"):
-                username = st.text_input("Потребителско име")
-                password = st.text_input("Парола", type="password")
-                login_clicked = st.form_submit_button("Влез", type="primary")
-            if login_clicked:
-                found = verify_user(username, password)
-                if found:
-                    st.session_state["user"] = found
-                    st.rerun()
-                else:
-                    st.error("Грешно потребителско име или парола.")
+    page_title("Профил")
 
-        with tab_register:
-            with st.form("register_form"):
-                new_name = st.text_input("Избери потребителско име")
-                new_pass = st.text_input("Парола (поне 8 символа)", type="password")
-                new_pass2 = st.text_input("Повтори паролата", type="password")
-                register_clicked = st.form_submit_button("Създай профил", type="primary")
-            if register_clicked:
-                if not re.fullmatch(r"\w{3,30}", new_name.strip()):
-                    st.error("Името е от 3 до 30 символа: букви, цифри или _ (без интервали).")
-                elif len(new_pass) < 8:
-                    st.error("Паролата трябва да е поне 8 символа.")
-                elif new_pass != new_pass2:
-                    st.error("Двете пароли не съвпадат.")
-                elif create_user(new_name, new_pass):
-                    st.session_state["user"] = verify_user(new_name, new_pass)
-                    st.rerun()
+    if st.session_state.pop("profile_saved", False):
+        st.success("Профилът е запазен.")
+
+    # ----- Горна карта: снимка, име, био -----
+    with st.container(key="card_profile"):
+        col_avatar, col_info = st.columns([1, 3])
+        with col_avatar:
+            st.markdown(avatar_html(profile["avatar"], profile["username"]), unsafe_allow_html=True)
+        with col_info:
+            member_since = datetime.fromisoformat(profile["created_at"]).strftime("%d.%m.%Y")
+            st.markdown(
+                profile_info_html(profile["username"], member_since, profile["bio"]),
+                unsafe_allow_html=True,
+            )
+
+    # ----- Числа -----
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Решени тестове", len(results))
+    c2.metric("Приятели", friends)
+    if results:
+        c3.metric("Среден резултат", f"{round(sum(r['percent'] for r in results) / len(results))}%")
+    else:
+        c3.metric("Среден резултат", "няма")
+    st.caption("Добавянето на приятели идва скоро.")
+
+    # ----- Последни тестове -----
+    st.subheader("Последни тестове")
+    if results:
+        st.markdown(recent_tests_html(results[:5]), unsafe_allow_html=True)
+        st.caption("Всички тестове и графиката на прогреса са в „История“.")
+    else:
+        st.info("Още няма решени тестове. Започни от „Нов тест“.")
+
+    # ----- Редакция на профила -----
+    with st.expander("Редактирай профила"):
+        # Номерът в ключа се сменя след запазване, за да се изчисти полето за снимка
+        counter = st.session_state.get("avatar_upload_n", 0)
+        with st.form("profile_form"):
+            new_photo = st.file_uploader(
+                "Профилна снимка (PNG или JPG)",
+                type=["png", "jpg", "jpeg"],
+                key=f"avatar_upload_{counter}",
+            )
+            new_bio = st.text_area(
+                "Био",
+                value=profile["bio"],
+                max_chars=200,
+                height=110,
+                placeholder="Няколко думи за теб. Например какво учиш.",
+            )
+            saved = st.form_submit_button("Запази промените", type="primary")
+
+        if saved:
+            avatar_bytes = None
+            error = None
+            if new_photo is not None:
+                raw = new_photo.getvalue()
+                if len(raw) > MAX_PHOTO_BYTES:
+                    error = "Снимката е над 5 MB. Избери по-малка."
                 else:
-                    st.error("Това име вече е заето. Избери друго.")
+                    try:
+                        avatar_bytes = make_avatar(raw)
+                    except Exception:
+                        error = "Файлът не е валидна снимка. Опитай с PNG или JPG."
+            if error:
+                st.error(error)
+            else:
+                update_profile(user["id"], new_bio.strip(), avatar_bytes)
+                st.session_state["avatar_upload_n"] = counter + 1
+                st.session_state["profile_saved"] = True
+                st.rerun()
+
+    # ----- Изход -----
+    if st.button("Изход"):
+        for key in ("user", "test", "result", "settings"):
+            st.session_state.pop(key, None)
+        st.rerun()
 
 
 # ---------- Меню отляво ----------

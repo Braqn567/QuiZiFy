@@ -6,6 +6,7 @@ import streamlit as st
 from PIL import Image, ImageOps
 
 from database import (
+    change_password,
     count_friends,
     create_user,
     get_profile,
@@ -64,7 +65,7 @@ def _register_form():
     if not submitted:
         return
 
-    error = _registration_error(username, password, repeat)
+    error = _username_error(username) or _password_error(password, repeat)
     if error:
         st.error(error)
     elif create_user(username, password):
@@ -74,9 +75,13 @@ def _register_form():
         st.error("Това име вече е заето. Избери друго.")
 
 
-def _registration_error(username, password, repeat):
+def _username_error(username):
     if not USERNAME_PATTERN.fullmatch(username.strip()):
         return "Името е от 3 до 30 символа: букви, цифри или _ (без интервали)."
+    return None
+
+
+def _password_error(password, repeat):
     if len(password) < MIN_PASSWORD_LENGTH:
         return "Паролата трябва да е поне 8 символа."
     if password != repeat:
@@ -98,6 +103,7 @@ def _show_profile(user):
     _stats(results, count_friends(user["id"]))
     _recent_tests(results)
     _edit_form(user, profile)
+    _password_form(user)
 
     if st.button("Изход"):
         for key in ("user", "test", "result", "settings"):
@@ -176,6 +182,27 @@ def _edit_form(user, profile):
         st.session_state["avatar_upload_n"] = upload_number + 1
         st.session_state["profile_saved"] = True
         st.rerun()
+
+
+def _password_form(user):
+    with st.expander("Смяна на парола"):
+        with st.form("password_form"):
+            current = st.text_input("Сегашна парола", type="password")
+            new = st.text_input("Нова парола (поне 8 символа)", type="password")
+            repeat = st.text_input("Повтори новата парола", type="password")
+            submitted = st.form_submit_button("Смени паролата", type="primary")
+        if not submitted:
+            return
+
+        error = _password_error(new, repeat)
+        if error:
+            st.error(error)
+        elif new == current:
+            st.error("Новата парола трябва да е различна от сегашната.")
+        elif change_password(user["id"], current, new):
+            st.success("Паролата е сменена.")
+        else:
+            st.error("Сегашната парола не е вярна.")
 
 
 def _make_avatar(raw_bytes):

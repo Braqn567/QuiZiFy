@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from database import list_results
+from database import delete_result, list_results
 from scoring import grade_for, weak_topics
 from ui import highlights_html, page_title, show_result
 
@@ -24,7 +24,7 @@ def render():
     if len(percents) >= 2:
         _progress_chart(percents)
     _weakest_topics(results)
-    _test_picker(results)
+    _test_picker(user, results)
 
 
 def _summary(percents):
@@ -59,7 +59,7 @@ def _weakest_topics(results):
         st.success("Всички теми са над 70%. Продължавай така.")
 
 
-def _test_picker(results):
+def _test_picker(user, results):
     def label(i):
         r = results[i]
         name, digit, _ = grade_for(r["percent"])
@@ -68,4 +68,31 @@ def _test_picker(results):
 
     st.subheader("Твоите тестове")
     choice = st.selectbox("Отвори тест", range(len(results)), format_func=label)
-    show_result(results[choice]["data"])
+    selected = results[choice]
+    _delete_control(user, selected["id"])
+    show_result(selected["data"])
+
+
+def _delete_control(user, result_id):
+    """Бутон за изтриване с потвърждение, за да не се трие по грешка."""
+    pending = st.session_state.get("pending_delete")
+    if pending is not None and pending != result_id:
+        st.session_state.pop("pending_delete")  # избран е друг тест
+        pending = None
+
+    if pending is None:
+        if st.button("Изтрий този тест"):
+            st.session_state["pending_delete"] = result_id
+            st.rerun()
+        return
+
+    st.warning("Тестът ще бъде изтрит завинаги. Да продължим ли?")
+    confirm_col, cancel_col, _ = st.columns([1, 1, 3])
+    if confirm_col.button("Да, изтрий", type="primary"):
+        delete_result(user["id"], result_id)
+        st.session_state.pop("pending_delete", None)
+        st.toast("Тестът е изтрит")
+        st.rerun()
+    if cancel_col.button("Отказ"):
+        st.session_state.pop("pending_delete", None)
+        st.rerun()

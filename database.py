@@ -88,6 +88,12 @@ def _hash_password(password, salt):
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, HASH_ITERATIONS)
 
 
+def _password_matches(row, password):
+    expected = bytes.fromhex(row["password_hash"])
+    actual = _hash_password(password, bytes.fromhex(row["salt"]))
+    return hmac.compare_digest(expected, actual)
+
+
 def create_user(username, password):
     """Връща False, ако потребителското име е заето."""
     salt = os.urandom(16)
@@ -116,13 +122,41 @@ def verify_user(username, password):
             "SELECT id, username, salt, password_hash FROM users WHERE username_key = ?",
             (_username_key(username),),
         ).fetchone()
-    if row is None:
-        return None
-    expected = bytes.fromhex(row["password_hash"])
-    actual = _hash_password(password, bytes.fromhex(row["salt"]))
-    if hmac.compare_digest(expected, actual):
+    if row is not None and _password_matches(row, password):
         return {"id": row["id"], "username": row["username"]}
     return None
+
+
+def change_password(user_id, old_password, new_password):
+    """Сменя паролата. Връща False, ако старата парола не е вярна."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT salt, password_hash FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None or not _password_matches(row, old_password):
+            return False
+        salt = os.urandom(16)
+        conn.execute(
+            "UPDATE users SET salt = ?, password_hash = ? WHERE id = ?",
+            (salt.hex(), _hash_password(new_password, salt).hex(), user_id),
+        )
+    return True
+
+
+def change_password(user_id, old_password, new_password):
+    """Сменя паролата. Връща False, ако старата парола не е вярна."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT salt, password_hash FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if row is None or not _password_matches(row, old_password):
+            return False
+        salt = os.urandom(16)
+        conn.execute(
+            "UPDATE users SET salt = ?, password_hash = ? WHERE id = ?",
+            (salt.hex(), _hash_password(new_password, salt).hex(), user_id),
+
+        )
 
 
 def get_profile(user_id):
@@ -163,6 +197,15 @@ def save_result(user_id, result):
             "INSERT INTO results (user_id, created_at, percent, data) VALUES (?, ?, ?, ?)",
             (user_id, _now(), result["percent"], json.dumps(result, ensure_ascii=False)),
         )
+
+
+def delete_result(user_id, result_id):
+    """Изтрива тест, само ако е на този потребител. Връща True при успех."""
+    with connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM results WHERE id = ? AND user_id = ?", (result_id, user_id)
+        )
+        return cursor.rowcount > 0
 
 
 def list_results(user_id):

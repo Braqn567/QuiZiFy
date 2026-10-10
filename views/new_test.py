@@ -116,9 +116,23 @@ def _solve(test, settings):
         _check(test, settings)
 
     if "result" in st.session_state:
-        show_result(st.session_state["result"])
+        result = st.session_state["result"]
+        show_result(result, after_topics=lambda: _retry_wrong(test, result))
         if not st.session_state.get("user"):
             st.info("Влез в профила си (меню → Профил), за да се запазват резултатите ти.")
+
+
+def _retry_wrong(test, result):
+    """Нов тест от въпросите, на които не е отговорено напълно вярно."""
+    wrong = [q for q, (kind, _) in zip(test, result["feedback"]) if kind != "success"]
+    if not wrong:
+        return
+    if st.button(f"Повтори грешните въпроси ({len(wrong)})"):
+        _clear_answers()
+        st.session_state["test"] = wrong
+        st.session_state["started_at"] = datetime.now()
+        st.session_state.pop("result", None)
+        st.rerun()
 
 
 def _question_card(i, question, multi):

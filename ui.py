@@ -117,7 +117,7 @@ def recent_tests_html(results):
     return "<div>" + "".join(rows) + "</div>"
 
 
-def show_result(result):
+def show_result(result, after_topics=None):
     """Карта с оценката, времето и успеваемостта по теми за един решен тест."""
     percent = result["percent"]
     passed = percent >= PASS_PERCENT
@@ -169,7 +169,8 @@ def show_result(result):
         st.markdown(highlights_html(weak), unsafe_allow_html=True)
     else:
         st.success("Всички теми са над 70%. Качи нов материал и провери следващата тема.")
-
+    if after_topics:
+        after_topics()
     with st.expander("Прегледай всички отговори"):
         for kind, text in result["feedback"]:
             getattr(st, kind)(text)
